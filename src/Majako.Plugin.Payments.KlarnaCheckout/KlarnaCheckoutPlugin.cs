@@ -1,14 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web.Routing;
-using Nop.Core.Plugins;
+﻿using Nop.Core.Plugins;
 using Nop.Services.Cms;
-using Nop.Services.Common;
 using Nop.Services.Localization;
-using Nop.Web.Framework.Web;
+using System.Collections.Generic;
+using System.Web.Routing;
 
 namespace Majako.Plugin.Payments.KlarnaCheckout
 {
@@ -50,7 +44,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout
             _context.Install();
 
             this.AddOrUpdatePluginLocaleResource("Majako.Plugin.Payments.KlarnaCheckout.Settings.EId", "Butiks-ID(EID)");
-            this.AddOrUpdatePluginLocaleResource("Majako.Plugin.Payments.KlarnaCheckout.Settings.SharedSecret", "Lösneord");
+            this.AddOrUpdatePluginLocaleResource("Majako.Plugin.Payments.KlarnaCheckout.Settings.SharedSecret", "Lösenord");
             this.AddOrUpdatePluginLocaleResource("Majako.Plugin.Payments.KlarnaCheckout.Settings.TermsUrl", "Köpvillkor URL");
             this.AddOrUpdatePluginLocaleResource("Majako.Plugin.Payments.KlarnaCheckout.Settings.CheckoutUrl", "Kassa URL");
             this.AddOrUpdatePluginLocaleResource("Majako.Plugin.Payments.KlarnaCheckout.Settings.TestMode", "Testläge");

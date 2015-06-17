@@ -84,6 +84,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
         private readonly IVendorService _vendorService;
         private readonly ICustomerActivityService _customerActivityService;
         private readonly IEventPublisher _eventPublisher;
+        private readonly IPdfService _pdfService;
         private readonly ILogger _logger;
         private readonly IOrderProcessingService _orderProcessingService;
         private readonly IEmailAccountService _emailAccountService;
@@ -131,6 +132,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
             IVendorService vendorService,
             ICustomerActivityService customerActivityService,
             IEventPublisher eventPublisher,
+            IPdfService pdfService,
             ILogger logger,
             IOrderProcessingService orderProcessingService,
             IEmailAccountService emailAccountService,
@@ -174,6 +176,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
             _vendorService = vendorService;
             _customerActivityService = customerActivityService;
             _eventPublisher = eventPublisher;
+            _pdfService = pdfService;
             _logger = logger;
             _orderProcessingService = orderProcessingService;
             _emailAccountService = emailAccountService;
@@ -181,6 +184,118 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
             _queuedEmailService = queuedEmailService;
             _catalogSettings = catalogSettings;
             _shoppingCartSettings = shoppingCartSettings;
+        }
+
+        #endregion
+
+        #region Utilities
+
+        protected virtual void ProcessOrderPaid(Nop.Core.Domain.Orders.Order order)
+        {
+            if (order == null)
+                throw new ArgumentNullException("order");
+
+            //raise event
+            _eventPublisher.Publish(new OrderPaidEvent(order));
+
+            //order paid email notification
+            if (order.OrderTotal != decimal.Zero)
+            {
+                //we should not send it for free ($0 total) orders?
+                //remove this "if" statement if you want to send it in this case
+
+                var orderPaidAttachmentFilePath = _orderSettings.AttachPdfInvoiceToOrderPaidEmail ?
+                    _pdfService.PrintOrderToPdf(order, 0) : null;
+                var orderPaidAttachmentFileName = _orderSettings.AttachPdfInvoiceToOrderPaidEmail ?
+                    "order.pdf" : null;
+                _workflowMessageService.SendOrderPaidCustomerNotification(order, order.CustomerLanguageId,
+                    orderPaidAttachmentFilePath, orderPaidAttachmentFileName);
+
+                _workflowMessageService.SendOrderPaidStoreOwnerNotification(order, _localizationSettings.DefaultAdminLanguageId);
+                var vendors = GetVendorsInOrder(order);
+                foreach (var vendor in vendors)
+                {
+                    _workflowMessageService.SendOrderPaidVendorNotification(order, vendor, _localizationSettings.DefaultAdminLanguageId);
+                }
+                //TODO add "order paid email sent" order note
+            }
+
+            //customer roles with "purchased with product" specified
+            ProcessCustomerRolesWithPurchasedProductSpecified(order, true);
+        }
+
+        /// <summary>
+        /// Process customer roles with "Purchased with Product" property configured
+        /// </summary>
+        /// <param name="order">Order</param>
+        /// <param name="add">A value indicating whether to add configured customer role; true - add, false - remove</param>
+        protected virtual void ProcessCustomerRolesWithPurchasedProductSpecified(Nop.Core.Domain.Orders.Order order, bool add)
+        {
+            if (order == null)
+                throw new ArgumentNullException("order");
+
+            //purchased product IDs
+            var purchasedProductIds = order.OrderItems.Select(oi => oi.ProductId).ToList();
+
+            //list of customer roles
+            var customerRoles = _customerService
+                .GetAllCustomerRoles(true)
+                .Where(cr => purchasedProductIds.Contains(cr.PurchasedWithProductId))
+                .ToList();
+
+            if (customerRoles.Count > 0)
+            {
+                var customer = order.Customer;
+                foreach (var customerRole in customerRoles)
+                {
+                    if (customer.CustomerRoles.Count(cr => cr.Id == customerRole.Id) == 0)
+                    {
+                        //not in the list yet
+                        if (add)
+                        {
+                            //add
+                            customer.CustomerRoles.Add(customerRole);
+                        }
+                    }
+                    else
+                    {
+                        //already in the list
+                        if (!add)
+                        {
+                            //remove
+                            customer.CustomerRoles.Remove(customerRole);
+                        }
+                    }
+                }
+                _customerService.UpdateCustomer(customer);
+            }
+        }
+
+        /// <summary>
+        /// Get a list of vendors in order (order items)
+        /// </summary>
+        /// <param name="order">Order</param>
+        /// <returns>Vendors</returns>
+        protected virtual IList<Vendor> GetVendorsInOrder(Nop.Core.Domain.Orders.Order order)
+        {
+            var vendors = new List<Vendor>();
+            foreach (var orderItem in order.OrderItems)
+            {
+                var vendorId = orderItem.Product.VendorId;
+                //find existing
+                var vendor = vendors.FirstOrDefault(v => v.Id == vendorId);
+                if (vendor == null)
+                {
+                    //not found. load by Id
+                    vendor = _vendorService.GetVendorById(vendorId);
+                    if (vendor != null && !vendor.Deleted && vendor.Active)
+                    {
+                        vendors.Add(vendor);
+                    }
+                }
+            }
+
+            return vendors;
         }
 
         #endregion
@@ -265,10 +380,10 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
             }
             catch (Exception ex)
             {
-                
                throw new NopException(ex.ToString());
             }
         }
+
         public PlaceOrderResult PlaceOrder(KlarnaOrder klarnaOrder, string resourceUri, out int orderId)
         {
             if (klarnaOrder == null)
@@ -304,7 +419,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                 {
                     registeredCustomer = customer;
                 }
-                
+
                 if (customer == null)
                     throw new ArgumentException("Customer is not set");
 
@@ -380,9 +495,14 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                 //validate individual cart items
                 foreach (var sci in cart)
                 {
-                    var sciWarnings = _shoppingCartService.GetShoppingCartItemWarnings(customer, sci.ShoppingCartType,
-                        sci.Product, kcoOrderRequest.StoreId, sci.AttributesXml,
-                        sci.CustomerEnteredPrice, sci.Quantity, false);
+                    var sciWarnings = _shoppingCartService.GetShoppingCartItemWarnings(customer,
+                        sci.ShoppingCartType,
+                        sci.Product,
+                        kcoOrderRequest.StoreId,
+                        sci.AttributesXml,
+                        sci.CustomerEnteredPrice,
+                        quantity: sci.Quantity,
+                        automaticallyAddRequiredProductsIfEnabled: false);
                     if (sciWarnings.Count > 0)
                     {
                         var warningsSb = new StringBuilder();
@@ -608,7 +728,9 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                     {
                         //prices
                         taxRate = decimal.Zero;
-                        decimal scUnitPrice = _priceCalculationService.GetUnitPrice(sc, true);
+                        Discount appliedDiscount = null;
+                        decimal discountAmount = 0;
+                        decimal scUnitPrice = _priceCalculationService.GetUnitPrice(sc, true, out discountAmount, out appliedDiscount);
                         decimal scSubTotal = _priceCalculationService.GetSubTotal(sc, true);
                         decimal scUnitPriceInclTax = _taxService.GetProductPrice(sc.Product, scUnitPrice, true, customer, out taxRate);
                         decimal scUnitPriceExclTax = _taxService.GetProductPrice(sc.Product, scUnitPrice, false, customer, out taxRate);
@@ -616,12 +738,11 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                         decimal scSubTotalExclTax = _taxService.GetProductPrice(sc.Product, scSubTotal, false, customer, out taxRate);
 
                         //discounts
-                        Discount scDiscount = null;
-                        decimal discountAmount = _priceCalculationService.GetDiscountAmount(sc, out scDiscount);
                         decimal discountAmountInclTax = _taxService.GetProductPrice(sc.Product, discountAmount, true, customer, out taxRate);
                         decimal discountAmountExclTax = _taxService.GetProductPrice(sc.Product, discountAmount, false, customer, out taxRate);
-                        if (scDiscount != null && !appliedDiscounts.ContainsDiscount(scDiscount))
-                            appliedDiscounts.Add(scDiscount);
+                        if (appliedDiscount != null && !appliedDiscounts.ContainsDiscount(appliedDiscount)) {
+                            appliedDiscounts.Add(appliedDiscount);
+                        }
 
                         //attributes
                         string attributeDescription = _productAttributeFormatter.FormatAttributes(sc.Product, sc.AttributesXml, customer);
@@ -682,7 +803,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                         }
 
                         //inventory
-                        _productService.AdjustInventory(sc.Product, true, sc.Quantity, sc.AttributesXml);
+                        _productService.AdjustInventory(sc.Product, sc.Quantity, sc.AttributesXml);
                     }
 
                     //clear shopping cart
@@ -835,13 +956,15 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                         _localizationService.GetResource("ActivityLog.PublicStore.PlaceOrder"),
                         order.Id);
 
-                    //raise event       
-                    _eventPublisher.PublishOrderPlaced(order);
+                    //raise event
+                    //_eventPublisher.PublishOrderPlaced(order);
+                    _eventPublisher.Publish(new OrderPlacedEvent(order));
 
-                    //raise event         
+                    //raise event
                     if (order.PaymentStatus == PaymentStatus.Paid)
                     {
-                        _eventPublisher.PublishOrderPaid(order);
+                        //_eventPublisher.PublishOrderPaid(order);
+                        ProcessOrderPaid(order);
                     }
                     #endregion
 
@@ -873,7 +996,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
             }
 
             #endregion
-            
+
             return result;
         }
 
@@ -936,12 +1059,12 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
                     purchaseCountry = "FI";
                     break;
             }
-            
+
             var gui = new Dictionary<string, object>
             {
                 {"options", new List<string> {"disable_autofocus"}}
             };
-            
+
             return new Dictionary<string, object>
             {
                 { "purchase_country", purchaseCountry },
@@ -957,7 +1080,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
         private Dictionary<string, object> GetMerchantItem(string eId)
         {
             var storeUrl = _storeContext.CurrentStore.Url;
-            
+
             return new Dictionary<string, object>
             {
                 {"id", eId},
@@ -1042,9 +1165,9 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Services
             return cart.Select(item =>
                 new Dictionary<string, object>
                 {
-                    {"reference", item.Id.ToString()}, 
-                    {"name", GetShoppingCartItemName(item)}, 
-                    {"quantity", item.Quantity}, 
+                    {"reference", item.Id.ToString()},
+                    {"name", GetShoppingCartItemName(item)},
+                    {"quantity", item.Quantity},
                     { "unit_price", GetUnitPrice(item).ToCents() },
                     { "discount_rate", GetDiscountRate(item).ToCents() },
                     { "tax_rate", GetTaxRate(item).ToCents() }

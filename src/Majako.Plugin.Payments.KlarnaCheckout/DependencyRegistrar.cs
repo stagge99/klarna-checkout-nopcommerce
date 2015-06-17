@@ -26,6 +26,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout
 
             builder.RegisterType<EfRepository<KcoOrderRequest>>().As<IRepository<KcoOrderRequest>>().WithParameter(ResolvedParameter.ForNamed<IDbContext>(CONTEXT_NAME)).InstancePerHttpRequest();
         }
+
         public int Order
         {
             get { return 0; }

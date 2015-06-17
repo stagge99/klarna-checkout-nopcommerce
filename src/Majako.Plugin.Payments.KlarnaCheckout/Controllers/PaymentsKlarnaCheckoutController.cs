@@ -124,7 +124,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Controllers
             model.TestMode = _klarnaCheckoutSettings.TestMode;
             model.PlaceOrderToRegisteredAccount = _klarnaCheckoutSettings.PlaceOrderToRegisteredAccount;
 
-            return View("Majako.Plugin.Payments.KlarnaCheckout.Views.PaymentsKlarnaCheckout.Configure", model);
+            return View(model);
         }
 
         [HttpPost]
@@ -143,7 +143,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Controllers
             _klarnaCheckoutSettings.PlaceOrderToRegisteredAccount = model.PlaceOrderToRegisteredAccount;
             _settingService.SaveSetting(_klarnaCheckoutSettings);
 
-            return View("Majako.Plugin.Payments.KlarnaCheckout.Views.PaymentsKlarnaCheckout.Configure", model);
+            return View(model);
         }
 
         [ChildActionOnly]
@@ -165,7 +165,8 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Controllers
                 // shipping not required
             }
             var model = PrepareShippingMethodModel(cart);
-            return PartialView("Majako.Plugin.Payments.KlarnaCheckout.Views.PaymentsKlarnaCheckout.ShippingMethods", model);
+
+            return PartialView(model);
         }
 
         public ActionResult CheckoutSnippet()
@@ -312,7 +313,7 @@ namespace Majako.Plugin.Payments.KlarnaCheckout.Controllers
                 _kcoProcessor.PlaceOrder(klarnaOrder, resourceUri, out orderId);
                 if (orderId > 0)
                 {
-                    _kcoProcessor.Acknowledge(resourceUri, orderId); 
+                    _kcoProcessor.Acknowledge(resourceUri, orderId);
                 }
             }
             else
